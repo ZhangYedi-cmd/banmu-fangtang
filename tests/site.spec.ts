@@ -435,3 +435,95 @@ test("AC-12 content guide states the four writing rules", async ({ page }) => {
   expect(footer).not.toContain("赛博禅心");
   expect(footer).not.toContain("宝玉");
 });
+
+test("AC-L header mark is a 32px monochrome icon beside the site name", async ({ page }) => {
+  const forbiddenName = ["宝", "玉"].join("");
+  const forbiddenBrand = ["赛", "博", "禅", "心"].join("");
+
+  async function paintColor() {
+    return page.getByRole("link", { name: "半亩方塘" }).locator("svg").evaluate((svg) => {
+      const painted = svg.querySelector("rect, path, circle, polygon");
+      const target = painted ?? svg;
+      const style = getComputedStyle(target);
+      return style.fill !== "none" ? style.fill : style.stroke;
+    });
+  }
+
+  async function expectHomeMark(viewport: { width: number; height: number }) {
+    await page.setViewportSize(viewport);
+    await page.goto("/blog");
+    const mark = page.getByRole("link", { name: "半亩方塘" });
+    await expect(mark).toHaveAttribute("href", "/");
+    const icon = mark.locator("svg");
+    await expect(icon).toBeVisible();
+    await expect(mark).toContainText("半亩方塘");
+
+    const boxes = await mark.evaluate((element) => {
+      const svg = element.querySelector("svg");
+      const textNode = [...element.childNodes].find(
+        (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.includes("半亩方塘"),
+      );
+      if (!svg || !textNode) return null;
+      const range = document.createRange();
+      range.selectNodeContents(textNode);
+      const iconBox = svg.getBoundingClientRect();
+      const textBox = range.getBoundingClientRect();
+      return {
+        icon: { x: iconBox.x, width: iconBox.width, height: iconBox.height },
+        textX: textBox.x,
+      };
+    });
+    expect(boxes).not.toBeNull();
+    expect(Math.abs(boxes!.icon.width - 32)).toBeLessThan(1);
+    expect(Math.abs(boxes!.icon.height - 32)).toBeLessThan(1);
+    expect(boxes!.icon.x + boxes!.icon.width).toBeLessThanOrEqual(boxes!.textX + 1);
+
+    const markup = await icon.evaluate((element) => element.outerHTML);
+    expect(markup).not.toMatch(/\p{Script=Han}/u);
+    expect(markup.toLowerCase()).not.toContain("baoyu.io");
+
+    await icon.click();
+    await expect(page).toHaveURL("/");
+    await page.goto("/about");
+    await page.getByRole("link", { name: "半亩方塘" }).getByText("半亩方塘", { exact: true }).click();
+    await expect(page).toHaveURL("/");
+  }
+
+  await expectHomeMark({ width: 1280, height: 800 });
+  await expectHomeMark({ width: 390, height: 800 });
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/");
+  await chooseTheme(page, "light");
+  const lightBody = await page.evaluate(() => getComputedStyle(document.body).color);
+  const lightIcon = await paintColor();
+  expect(lightIcon).toBe(lightBody);
+
+  await page.getByRole("button", { name: "切换浅色或深色主题" }).click();
+  await page.waitForFunction(() => document.documentElement.classList.contains("dark"));
+  const darkBody = await page.evaluate(() => getComputedStyle(document.body).color);
+  const darkIcon = await paintColor();
+  expect(darkIcon).toBe(darkBody);
+  expect(darkIcon).not.toBe(lightIcon);
+
+  const headerText = await page.locator("header").innerText();
+  expect(headerText).not.toContain(forbiddenName);
+  expect(headerText).not.toContain(forbiddenBrand);
+
+  const markSources = ["components", "public"].flatMap((directory) => {
+    const dir = path.join(root, directory);
+    if (!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir, { recursive: true }).flatMap((entry) => {
+      const name = String(entry);
+      if (!name.endsWith(".svg") && !name.endsWith(".tsx")) return [];
+      return [path.join(dir, name)];
+    });
+  });
+  for (const file of markSources) {
+    expect(path.basename(file)).not.toContain(forbiddenName);
+    expect(path.basename(file)).not.toContain(forbiddenBrand);
+    const source = fs.readFileSync(file, "utf8");
+    expect(source).not.toContain(forbiddenName);
+    expect(source).not.toContain(forbiddenBrand);
+  }
+});
